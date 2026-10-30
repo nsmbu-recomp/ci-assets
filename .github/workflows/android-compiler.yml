@@ -107,7 +107,7 @@ jobs:
               if not archive.is_file():
                   raise SystemExit("missing " + name)
               with tarfile.open(archive) as tar:
-                  meta = json.load(tar.extractfile("build.json"))
+                  meta = json.load(tar.extractfile("./build.json"))
               if meta.get("abi") != abi or meta.get("llvm_revision") != pins.LLVM_REVISION or meta.get("ndk_revision") != pins.NDK_REVISION:
                   raise SystemExit(name + " does not match the pinned LLVM/NDK")
               digest = hashlib.sha256(archive.read_bytes()).hexdigest()
