@@ -1,0 +1,130 @@
+# Manual build of the compiler that runs on the phone.
+# It replaces the android-clang release in this repo (a prerelease, never marked latest).
+# nsmbu-recomp release builds only download that release.
+name: Android compiler
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: nsmbu-recomp branch, tag, or commit to build
+        required: false
+        default: main
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: nsmbu-recomp/nsmbu-recomp
+          ref: ${{ inputs.ref }}
+
+      - name: Ninja and the pinned NDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          read -r NDK < <(python3 -c "
+          import sys; sys.path.insert(0, 'tools/android'); import build_toolchain as b
+          print(b.NDK_REVISION)")
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK" > /dev/null
+          echo "NDK_REVISION=$NDK" >> "$GITHUB_ENV"
+
+      - id: pins
+        name: Pinned LLVM revision
+        run: |
+          read -r LLVM < <(python3 -c "
+          import sys; sys.path.insert(0, 'tools/android'); import build_toolchain as b
+          print(b.LLVM_REVISION)")
+          echo "llvm=$LLVM" >> "$GITHUB_OUTPUT"
+
+      - name: LLVM source at the pinned revision
+        uses: actions/checkout@v5
+        with:
+          repository: llvm/llvm-project
+          ref: ${{ steps.pins.outputs.llvm }}
+          path: build/llvm-source
+
+      - name: Build the Android-hosted compiler
+        run: |
+          python3 tools/android/build_toolchain.py --source build/llvm-source \
+            --ndk "$ANDROID_HOME/ndk/$NDK_REVISION" --abi "${{ matrix.abi }}" \
+            --out build/compiler --jobs "$(nproc)"
+          tar -czf "android-clang-${{ matrix.abi }}.tar.gz" -C build/compiler/package .
+          rm -rf build/compiler/native build/compiler/target build/llvm-source
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-clang-${{ matrix.abi }}
+          path: android-clang-${{ matrix.abi }}.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: nsmbu-recomp/nsmbu-recomp
+          ref: ${{ inputs.ref }}
+          path: src
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: android-clang-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums and manifest
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, tarfile
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, "src/tools/android")
+          import build_toolchain as pins
+          dist = Path("dist")
+          script = hashlib.sha256(Path("src/tools/android/build_toolchain.py").read_bytes()).hexdigest()
+          manifest = {
+              "llvm_revision": pins.LLVM_REVISION,
+              "ndk_revision": pins.NDK_REVISION,
+              "build_toolchain_sha256": script,
+              "assets": {},
+          }
+          for abi in ("arm64-v8a", "x86_64"):
+              name = "android-clang-%s.tar.gz" % abi
+              archive = dist / name
+              if not archive.is_file():
+                  raise SystemExit("missing " + name)
+              with tarfile.open(archive) as tar:
+                  meta = json.load(tar.extractfile("build.json"))
+              if meta.get("abi") != abi or meta.get("llvm_revision") != pins.LLVM_REVISION or meta.get("ndk_revision") != pins.NDK_REVISION:
+                  raise SystemExit(name + " does not match the pinned LLVM/NDK")
+              digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+              (dist / (name + ".sha256")).write_text("%s  %s\n" % (digest, name))
+              manifest["assets"][abi] = name
+          (dist / "android-clang.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+
+      - name: Publish the android-clang release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete android-clang --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
+          gh release create android-clang dist/android-clang-*.tar.gz dist/android-clang-*.tar.gz.sha256 dist/android-clang.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --latest=false \
+            --title "Android-hosted compiler" \
+            --notes "Compiler that runs on the phone (clang, lld, llvm-ar). nsmbu-recomp release builds download this. It is not a player download."
