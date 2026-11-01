@@ -1,0 +1,83 @@
+# Builds SDL 3.4.18 for the nsmbu-recomp release jobs and replaces the sdl3 release
+# in this repo (a prerelease, never marked latest). Those jobs only download it.
+name: SDL3
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+          - platform: linux-aarch64
+            runner: ubuntu-22.04-arm
+          - platform: windows-x86_64
+            runner: windows-latest
+          - platform: windows-arm64
+            runner: windows-11-arm
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Linux build dependencies
+        if: startsWith(matrix.platform, 'linux')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $(python3 sdl3/build.py linux-packages)
+
+      - name: Ninja
+        if: startsWith(matrix.platform, 'windows')
+        run: python -m pip install ninja
+
+      - name: Build and pack SDL3
+        run: |
+          if command -v python3 >/dev/null; then PY=python3; else PY=python; fi
+          "$PY" sdl3/build.py build --platform "${{ matrix.platform }}" --prefix "$(cygpath -m "$RUNNER_TEMP/sdl3" 2>/dev/null || echo "$RUNNER_TEMP/sdl3")"
+          "$PY" sdl3/build.py pack --prefix "$(cygpath -m "$RUNNER_TEMP/sdl3" 2>/dev/null || echo "$RUNNER_TEMP/sdl3")" --out "sdl3-${{ matrix.platform }}.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdl3-${{ matrix.platform }}
+          path: sdl3-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sdl3-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums and manifest
+        run: python3 sdl3/build.py manifest --dist dist
+
+      - name: Publish the sdl3 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete sdl3 --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
+          gh release create sdl3 dist/sdl3-*.tar.gz dist/sdl3-*.tar.gz.sha256 dist/sdl3.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --latest=false \
+            --title "SDL3 3.4.18" \
+            --notes "SDL3 prefixes for nsmbu-recomp release builds (Linux x86-64 and arm64, Windows x86-64 and arm64). Not a player download."

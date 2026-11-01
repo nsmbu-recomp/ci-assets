@@ -14,3 +14,10 @@ The tag `android-clang` holds the compiler that runs on the phone.
 Run the Android compiler workflow in this repo to replace that release.
 Game release builds download it.
 They do not compile LLVM.
+
+## SDL3
+
+The tag `sdl3` holds prebuilt SDL 3.4.18 prefixes for Linux and Windows.
+Run the SDL3 workflow in this repo to replace that release.
+Game release builds download it.
+They do not compile SDL.
