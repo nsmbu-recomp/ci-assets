@@ -61,6 +61,10 @@ LINUX_PACKAGES = (
 )
 
 
+def posix(path):
+    return path.replace("\\", "/")
+
+
 def sha256_file(path):
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -133,9 +137,9 @@ def build(platform, prefix):
         source = os.path.join(source_root, "SDL3-%s" % VERSION)
         env = os.environ.copy()
         cmake = [
-            "cmake", "-S", source, "-B", os.path.join(work, "build"), "-G", "Ninja",
+            "cmake", "-S", posix(source), "-B", posix(os.path.join(work, "build")), "-G", "Ninja",
             "-DCMAKE_BUILD_TYPE=Release",
-            "-DCMAKE_INSTALL_PREFIX=" + prefix,
+            "-DCMAKE_INSTALL_PREFIX=" + posix(prefix),
             "-DSDL_SHARED=ON",
             "-DSDL_STATIC=" + ("ON" if mingw_key else "OFF"),
             "-DSDL_TESTS=OFF",
@@ -153,9 +157,9 @@ def build(platform, prefix):
             triple = mingw["triple"]
             env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
             cmake.extend([
-                "-DCMAKE_C_COMPILER=" + os.path.join(bindir, triple + "-clang.exe"),
-                "-DCMAKE_CXX_COMPILER=" + os.path.join(bindir, triple + "-clang++.exe"),
-                "-DCMAKE_RC_COMPILER=" + os.path.join(bindir, triple + "-windres.exe"),
+                "-DCMAKE_C_COMPILER=" + posix(os.path.join(bindir, triple + "-clang.exe")),
+                "-DCMAKE_CXX_COMPILER=" + posix(os.path.join(bindir, triple + "-clang++.exe")),
+                "-DCMAKE_RC_COMPILER=" + posix(os.path.join(bindir, triple + "-windres.exe")),
             ])
         run(cmake, env)
         run(["cmake", "--build", os.path.join(work, "build")], env)
